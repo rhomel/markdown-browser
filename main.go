@@ -28,6 +28,12 @@ type treeEntry struct {
 	Children  []treeEntry
 }
 
+var (
+	errPathEscape      = errors.New("path escape")
+	errIgnoredPath     = errors.New("ignored path")
+	errPathNotReadable = errors.New("path not readable")
+)
+
 func main() {
 	if len(os.Args) < 2 {
 		fatalf("usage: %s <server|generate> [args]", os.Args[0])
@@ -331,7 +337,12 @@ func serveMarkdownSource(w http.ResponseWriter, rootAbs, mdRel string) {
 func serveRenderedMarkdown(w http.ResponseWriter, rootAbs, mdRel string) {
 	pageHTML, err := renderMarkdownPage(rootAbs, mdRel)
 	if err != nil {
-		notFound(w)
+		if isNotFoundRenderError(err) {
+			notFound(w)
+			return
+		}
+		log.Printf("render markdown error for %q: %v", mdRel, err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -339,19 +350,23 @@ func serveRenderedMarkdown(w http.ResponseWriter, rootAbs, mdRel string) {
 }
 
 func renderDirectoryHTML(rootAbs, relDir string) (string, error) {
-	return renderDirectoryHTMLGenerate(rootAbs, relDir, "")
+	return renderDirectoryHTMLWithOptions(rootAbs, relDir, "", true)
 }
 
 func renderDirectoryHTMLGenerate(rootAbs, relDir, excludedRel string) (string, error) {
+	return renderDirectoryHTMLWithOptions(rootAbs, relDir, excludedRel, false)
+}
+
+func renderDirectoryHTMLWithOptions(rootAbs, relDir, excludedRel string, absoluteLinks bool) (string, error) {
 	dirAbs := filepath.Join(rootAbs, filepath.FromSlash(relDir))
 	if err := ensureDir(dirAbs); err != nil {
 		return "", err
 	}
 	if relDir != "" && isIgnoredRelPath(relDir) {
-		return "", errors.New("ignored path")
+		return "", errIgnoredPath
 	}
 	if !isReadablePath(dirAbs) {
-		return "", errors.New("directory not readable")
+		return "", errPathNotReadable
 	}
 
 	entries, err := buildTree(rootAbs, relDir, excludedRel)
@@ -360,10 +375,8 @@ func renderDirectoryHTMLGenerate(rootAbs, relDir, excludedRel string) (string, e
 	}
 
 	var b strings.Builder
-	b.WriteString("<!doctype html><html><head><meta charset=\"utf-8\"><title>Index</title></head><body>")
-	renderTreeHTML(&b, entries, relDir)
-	b.WriteString("</body></html>")
-	return b.String(), nil
+	renderTreeHTML(&b, entries, relDir, absoluteLinks)
+	return wrapHTMLPageWithTitle("Index", b.String()), nil
 }
 
 func buildTree(rootAbs, relDir, excludedRel string) ([]treeEntry, error) {
@@ -431,19 +444,18 @@ func buildTree(rootAbs, relDir, excludedRel string) ([]treeEntry, error) {
 	return out, nil
 }
 
-func renderTreeHTML(b *strings.Builder, entries []treeEntry, relDir string) {
+func renderTreeHTML(b *strings.Builder, entries []treeEntry, pageRelDir string, absoluteLinks bool) {
 	b.WriteString("<ul>")
 	for _, e := range entries {
 		if e.IsIndexMD {
 			continue
 		}
 		b.WriteString("<li>")
+		href := treeEntryHref(pageRelDir, e.RelPath, absoluteLinks)
 		if e.IsDir {
-			href := "/" + strings.TrimPrefix(e.RelPath, "./")
 			b.WriteString(`<a href="` + html.EscapeString(href) + `">` + html.EscapeString(e.Name) + `</a>`)
-			renderTreeHTML(b, e.Children, e.RelPath)
+			renderTreeHTML(b, e.Children, pageRelDir, absoluteLinks)
 		} else {
-			href := "/" + strings.TrimPrefix(e.RelPath, "./")
 			b.WriteString(`<a href="` + html.EscapeString(href) + `">` + html.EscapeString(e.Name) + `</a>`)
 		}
 		b.WriteString("</li>")
@@ -455,13 +467,13 @@ func renderMarkdownFile(rootAbs, mdRel string) (string, error) {
 	mdRel = filepath.ToSlash(filepath.Clean(filepath.FromSlash(mdRel)))
 	abs := filepath.Join(rootAbs, filepath.FromSlash(mdRel))
 	if !isWithinRoot(rootAbs, abs) {
-		return "", errors.New("path escape")
+		return "", errPathEscape
 	}
 	if isIgnoredRelPath(mdRel) {
-		return "", errors.New("ignored path")
+		return "", errIgnoredPath
 	}
 	if !isReadablePath(abs) {
-		return "", errors.New("file not readable")
+		return "", errPathNotReadable
 	}
 	data, err := os.ReadFile(abs)
 	if err != nil {
@@ -487,7 +499,21 @@ func renderMarkdownPage(rootAbs, mdRel string) (string, error) {
 }
 
 func wrapHTMLPage(body string) string {
-	return "<!doctype html><html><head><meta charset=\"utf-8\"></head><body>" + body + "</body></html>"
+	return wrapHTMLPageWithTitle("", body)
+}
+
+func wrapHTMLPageWithTitle(title, body string) string {
+	var b strings.Builder
+	b.WriteString("<!doctype html><html><head><meta charset=\"utf-8\">")
+	if title != "" {
+		b.WriteString("<title>")
+		b.WriteString(html.EscapeString(title))
+		b.WriteString("</title>")
+	}
+	b.WriteString("</head><body>")
+	b.WriteString(body)
+	b.WriteString("</body></html>")
+	return b.String()
 }
 
 func reqToRel(reqPath string) (string, error) {
@@ -558,7 +584,7 @@ func dirHasIndexMD(dirAbs string) (bool, error) {
 
 func notFound(w http.ResponseWriter) {
 	w.WriteHeader(http.StatusNotFound)
-	writeHTTPString(w, "<!doctype html><html><body><h1>404 Not Found</h1></body></html>")
+	writeHTTPString(w, wrapHTMLPage("<h1>404 Not Found</h1>"))
 }
 
 func isIgnoredBaseName(name string) bool {
@@ -587,6 +613,27 @@ func isReadablePath(p string) bool {
 	}
 	_ = f.Close()
 	return true
+}
+
+func isNotFoundRenderError(err error) bool {
+	return errors.Is(err, os.ErrNotExist) ||
+		errors.Is(err, errPathEscape) ||
+		errors.Is(err, errIgnoredPath) ||
+		errors.Is(err, errPathNotReadable)
+}
+
+func treeEntryHref(pageRelDir, entryRelPath string, absoluteLinks bool) string {
+	if absoluteLinks {
+		return "/" + strings.TrimPrefix(entryRelPath, "./")
+	}
+	if pageRelDir == "" {
+		return strings.TrimPrefix(entryRelPath, "./")
+	}
+	rel, err := filepath.Rel(filepath.FromSlash(pageRelDir), filepath.FromSlash(entryRelPath))
+	if err != nil {
+		return strings.TrimPrefix(entryRelPath, "./")
+	}
+	return filepath.ToSlash(rel)
 }
 
 func writeHTTPString(w http.ResponseWriter, s string) {

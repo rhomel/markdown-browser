@@ -107,8 +107,8 @@ func TestGenerateAllCreatesIndexesAndRendersMarkdown(t *testing.T) {
 		t.Fatalf("generateAll error: %v", err)
 	}
 
-	assertFileContains(t, filepath.Join(out, "index.html"), `href="/hello.html"`)
-	assertFileContains(t, filepath.Join(out, "articles", "index.html"), `href="/articles/a.html"`)
+	assertFileContains(t, filepath.Join(out, "index.html"), `href="hello.html"`)
+	assertFileContains(t, filepath.Join(out, "articles", "index.html"), `href="a.html"`)
 	assertFileContains(t, filepath.Join(out, "hello.html"), "<h1>Hello</h1>")
 	assertFileContains(t, filepath.Join(out, "articles", "a.html"), "<p>A</p>")
 }
@@ -157,7 +157,7 @@ func TestIgnoredDotFilesAndDirectoriesAreSkippedAnd404(t *testing.T) {
 		t.Fatalf("generateAll error: %v", err)
 	}
 
-	assertFileContains(t, filepath.Join(out, "index.html"), `href="/visible.html"`)
+	assertFileContains(t, filepath.Join(out, "index.html"), `href="visible.html"`)
 	if _, err := os.Stat(filepath.Join(out, ".hidden.html")); !os.IsNotExist(err) {
 		t.Fatalf("unexpected generated hidden file html: err=%v", err)
 	}
@@ -203,9 +203,9 @@ func TestUnreadableFilesAreIgnored(t *testing.T) {
 		t.Fatalf("generateAll error: %v", err)
 	}
 
-	assertFileContains(t, filepath.Join(out, "index.html"), `href="/visible.html"`)
+	assertFileContains(t, filepath.Join(out, "index.html"), `href="visible.html"`)
 	indexHTML := readTestFile(t, filepath.Join(out, "index.html"))
-	if strings.Contains(indexHTML, `href="/private.html"`) {
+	if strings.Contains(indexHTML, `href="private.html"`) {
 		t.Fatalf("unreadable file should not appear in generated index: %q", indexHTML)
 	}
 	if _, err := os.Stat(filepath.Join(out, "private.html")); !os.IsNotExist(err) {
@@ -234,7 +234,7 @@ func TestGenerateSkipsOutputDirectoryWhenNestedInInput(t *testing.T) {
 	}
 
 	indexHTML := readTestFile(t, filepath.Join(out, "index.html"))
-	if strings.Contains(indexHTML, `href="/out"`) || strings.Contains(indexHTML, `href="/out/existing.html"`) {
+	if strings.Contains(indexHTML, `href="out"`) || strings.Contains(indexHTML, `href="out/existing.html"`) {
 		t.Fatalf("generated root index should exclude nested output directory tree: %q", indexHTML)
 	}
 	if _, err := os.Stat(filepath.Join(out, "existing.html")); !os.IsNotExist(err) {
