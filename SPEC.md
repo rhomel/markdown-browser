@@ -69,8 +69,11 @@ starting and HTTP server and waiting for requests to render markdown to html on
 demand, it will render the approppriate pages including directory tree HTML
 pages into a corresponding output directory.
 
-The output directory flag will be a required argument and the directory cannot
-resolve the the same directory as the current directory.
+The output directory flag will be a required argument.
+
+The output directory may be the same directory as the input markdown tree.
+When used this way, generated HTML files are written alongside the source
+markdown files.
 
 If an `index.md` file is present in any directory, then the generate command
 will avoid generating an automated index.html directory tree list and instead
@@ -215,4 +218,3 @@ be asked whether they want to continue or not. The confirmation prompt should
 include text mentioning that existing files will be overwritten. The generate
 command should also take a new boolean flag `-overwrite` which will default to
 overwriting existing output files.
-

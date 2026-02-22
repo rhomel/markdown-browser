@@ -210,10 +210,6 @@ func runGenerate(args []string) {
 	if sameDir(outAbs, cwdAbs) {
 		fatalf("output directory cannot be the same as the current directory")
 	}
-	if sameDir(rootAbs, outAbs) {
-		fatalf("output directory cannot be the same as markdown directory")
-	}
-
 	if dirExistsAndNotEmpty(outAbs) {
 		if !confirmOverwrite(outAbs, *overwrite) {
 			log.Printf("generate cancelled")

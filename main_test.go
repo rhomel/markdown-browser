@@ -244,6 +244,22 @@ func TestGenerateSkipsOutputDirectoryWhenNestedInInput(t *testing.T) {
 	assertFileContains(t, filepath.Join(out, "hello.html"), "<title>Hello</title>")
 }
 
+func TestGenerateAllowsOutputDirectoryEqualInputDirectory(t *testing.T) {
+	root := t.TempDir()
+
+	writeTestFile(t, filepath.Join(root, "hello.md"), "# Hello\n\nworld\n")
+	writeTestFile(t, filepath.Join(root, "posts", "a.md"), "A\n")
+
+	if err := generateAll(root, root, true); err != nil {
+		t.Fatalf("generateAll(root, root) error: %v", err)
+	}
+
+	assertFileContains(t, filepath.Join(root, "index.html"), `href="hello.html"`)
+	assertFileContains(t, filepath.Join(root, "hello.html"), "<title>Hello</title>")
+	assertFileContains(t, filepath.Join(root, "posts", "index.html"), `href="a.html"`)
+	assertFileContains(t, filepath.Join(root, "posts", "a.html"), "<p>A</p>")
+}
+
 func TestMDIgnorePatternsAffectServerAndGenerate(t *testing.T) {
 	root := t.TempDir()
 	out := t.TempDir()
