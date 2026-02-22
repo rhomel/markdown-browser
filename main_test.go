@@ -103,7 +103,7 @@ func TestGenerateAllCreatesIndexesAndRendersMarkdown(t *testing.T) {
 	writeTestFile(t, filepath.Join(root, "hello.md"), "# Hello\n")
 	writeTestFile(t, filepath.Join(root, "articles", "a.md"), "A\n")
 
-	if err := generateAll(root, out); err != nil {
+	if err := generateAll(root, out, true); err != nil {
 		t.Fatalf("generateAll error: %v", err)
 	}
 
@@ -121,7 +121,7 @@ func TestGenerateAllIndexMDOverridesAutoIndex(t *testing.T) {
 	writeTestFile(t, filepath.Join(root, "posts", "index.md"), "# Posts Home\n")
 	writeTestFile(t, filepath.Join(root, "posts", "a.md"), "A\n")
 
-	if err := generateAll(root, out); err != nil {
+	if err := generateAll(root, out, true); err != nil {
 		t.Fatalf("generateAll error: %v", err)
 	}
 
@@ -153,7 +153,7 @@ func TestIgnoredDotFilesAndDirectoriesAreSkippedAnd404(t *testing.T) {
 	writeTestFile(t, filepath.Join(root, ".secret", "a.md"), "# Secret\n")
 	writeTestFile(t, filepath.Join(root, "posts", ".draft.md"), "# Draft\n")
 
-	if err := generateAll(root, out); err != nil {
+	if err := generateAll(root, out, true); err != nil {
 		t.Fatalf("generateAll error: %v", err)
 	}
 
@@ -199,7 +199,7 @@ func TestUnreadableFilesAreIgnored(t *testing.T) {
 		t.Skip("filesystem/runtime does not enforce unreadable test file permissions")
 	}
 
-	if err := generateAll(root, out); err != nil {
+	if err := generateAll(root, out, true); err != nil {
 		t.Fatalf("generateAll error: %v", err)
 	}
 
@@ -220,6 +220,27 @@ func TestUnreadableFilesAreIgnored(t *testing.T) {
 			t.Fatalf("%s status = %d, want 404", target, rr.Code)
 		}
 	}
+}
+
+func TestGenerateSkipsOutputDirectoryWhenNestedInInput(t *testing.T) {
+	root := t.TempDir()
+	out := filepath.Join(root, "out")
+
+	writeTestFile(t, filepath.Join(root, "hello.md"), "# Hello\n")
+	writeTestFile(t, filepath.Join(root, "out", "existing.md"), "# Existing\n")
+
+	if err := generateAll(root, out, true); err != nil {
+		t.Fatalf("generateAll error: %v", err)
+	}
+
+	indexHTML := readTestFile(t, filepath.Join(out, "index.html"))
+	if strings.Contains(indexHTML, `href="/out"`) || strings.Contains(indexHTML, `href="/out/existing.html"`) {
+		t.Fatalf("generated root index should exclude nested output directory tree: %q", indexHTML)
+	}
+	if _, err := os.Stat(filepath.Join(out, "existing.html")); !os.IsNotExist(err) {
+		t.Fatalf("generator should not process markdown files inside nested output directory: err=%v", err)
+	}
+	assertFileContains(t, filepath.Join(out, "hello.html"), "<h1>Hello</h1>")
 }
 
 func writeTestFile(t *testing.T, path, content string) {

@@ -96,3 +96,17 @@ The following conditions should cause a file or directory to be ignored:
   always be ignored and skipped.
 - files and directories without read permission
 
+# Special Cases
+
+## generate command output directory is in the input directory
+
+If the output directory is within the input directory (for example `generate
+-out=out .`) then the output directory tree should not be included as part of
+the rendered content.
+
+If the output directory already exists and contains files, then the user should
+be asked whether they want to continue or not. The confirmation prompt should
+include text mentioning that existing files will be overwritten. The generate
+command should also take a new boolean flag `-overwrite` which will default to
+overwriting existing output files.
+

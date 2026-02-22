@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"errors"
 	"flag"
 	"fmt"
@@ -132,6 +133,7 @@ func handleRequest(w http.ResponseWriter, r *http.Request, rootAbs string) {
 func runGenerate(args []string) {
 	fsFlags := flag.NewFlagSet("generate", flag.ExitOnError)
 	outDir := fsFlags.String("out", "", "output directory (required)")
+	overwrite := fsFlags.Bool("overwrite", true, "overwrite existing output files")
 	fsFlags.Parse(args)
 
 	if *outDir == "" {
@@ -169,27 +171,36 @@ func runGenerate(args []string) {
 		fatalf("output directory cannot be the same as markdown directory")
 	}
 
+	if dirExistsAndNotEmpty(outAbs) {
+		if !confirmOverwrite(outAbs, *overwrite) {
+			log.Printf("generate cancelled")
+			return
+		}
+	}
+
 	if err := os.MkdirAll(outAbs, 0o755); err != nil {
 		fatalf("create output dir: %v", err)
 	}
 
-	if err := generateAll(rootAbs, outAbs); err != nil {
+	if err := generateAll(rootAbs, outAbs, *overwrite); err != nil {
 		fatalf("generate failed: %v", err)
 	}
 }
 
-func generateAll(rootAbs, outAbs string) error {
+func generateAll(rootAbs, outAbs string, overwrite bool) error {
+	excludedRel := relIfWithin(rootAbs, outAbs)
+
 	hasRootIndexMD, err := dirHasIndexMD(rootAbs)
 	if err != nil {
 		return err
 	}
 	if !hasRootIndexMD {
-		data, err := renderDirectoryHTML(rootAbs, "")
+		data, err := renderDirectoryHTMLGenerate(rootAbs, "", excludedRel)
 		if err != nil {
 			return err
 		}
 		outFile := filepath.Join(outAbs, "index.html")
-		if err := os.WriteFile(outFile, []byte(data), 0o644); err != nil {
+		if err := writeFileMaybeOverwrite(outFile, []byte(data), overwrite); err != nil {
 			return err
 		}
 		fmt.Println(outFile)
@@ -211,6 +222,13 @@ func generateAll(rootAbs, outAbs string) error {
 			return err
 		}
 		if rel == "." {
+			return nil
+		}
+		rel = filepath.ToSlash(rel)
+		if excludedRel != "" && (rel == excludedRel || strings.HasPrefix(rel, excludedRel+"/")) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		if isIgnoredBaseName(d.Name()) {
@@ -240,12 +258,12 @@ func generateAll(rootAbs, outAbs string) error {
 				return nil
 			}
 
-			data, err := renderDirectoryHTML(rootAbs, rel)
+			data, err := renderDirectoryHTMLGenerate(rootAbs, rel, excludedRel)
 			if err != nil {
 				return err
 			}
 			outFile := filepath.Join(outDirPath, "index.html")
-			if err := os.WriteFile(outFile, []byte(data), 0o644); err != nil {
+			if err := writeFileMaybeOverwrite(outFile, []byte(data), overwrite); err != nil {
 				return err
 			}
 			fmt.Println(outFile)
@@ -254,19 +272,19 @@ func generateAll(rootAbs, outAbs string) error {
 
 		if strings.EqualFold(filepath.Base(rel), "index.md") {
 			outFile := filepath.Join(outAbs, filepath.Dir(rel), "index.html")
-			return renderMDFileTo(rootAbs, rel, outFile)
+			return renderMDFileTo(rootAbs, rel, outFile, overwrite)
 		}
 
 		if strings.HasSuffix(rel, ".md") {
 			outFile := filepath.Join(outAbs, strings.TrimSuffix(rel, ".md")+".html")
-			return renderMDFileTo(rootAbs, rel, outFile)
+			return renderMDFileTo(rootAbs, rel, outFile, overwrite)
 		}
 
 		return nil
 	})
 }
 
-func renderMDFileTo(rootAbs, mdRel, outFile string) error {
+func renderMDFileTo(rootAbs, mdRel, outFile string, overwrite bool) error {
 	pageHTML, err := renderMarkdownPage(rootAbs, mdRel)
 	if err != nil {
 		return err
@@ -274,7 +292,7 @@ func renderMDFileTo(rootAbs, mdRel, outFile string) error {
 	if err := os.MkdirAll(filepath.Dir(outFile), 0o755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(outFile, []byte(pageHTML), 0o644); err != nil {
+	if err := writeFileMaybeOverwrite(outFile, []byte(pageHTML), overwrite); err != nil {
 		return err
 	}
 	fmt.Println(outFile)
@@ -321,6 +339,10 @@ func serveRenderedMarkdown(w http.ResponseWriter, rootAbs, mdRel string) {
 }
 
 func renderDirectoryHTML(rootAbs, relDir string) (string, error) {
+	return renderDirectoryHTMLGenerate(rootAbs, relDir, "")
+}
+
+func renderDirectoryHTMLGenerate(rootAbs, relDir, excludedRel string) (string, error) {
 	dirAbs := filepath.Join(rootAbs, filepath.FromSlash(relDir))
 	if err := ensureDir(dirAbs); err != nil {
 		return "", err
@@ -332,7 +354,7 @@ func renderDirectoryHTML(rootAbs, relDir string) (string, error) {
 		return "", errors.New("directory not readable")
 	}
 
-	entries, err := buildTree(rootAbs, relDir)
+	entries, err := buildTree(rootAbs, relDir, excludedRel)
 	if err != nil {
 		return "", err
 	}
@@ -344,7 +366,7 @@ func renderDirectoryHTML(rootAbs, relDir string) (string, error) {
 	return b.String(), nil
 }
 
-func buildTree(rootAbs, relDir string) ([]treeEntry, error) {
+func buildTree(rootAbs, relDir, excludedRel string) ([]treeEntry, error) {
 	dirAbs := filepath.Join(rootAbs, filepath.FromSlash(relDir))
 	list, err := os.ReadDir(dirAbs)
 	if err != nil {
@@ -358,12 +380,15 @@ func buildTree(rootAbs, relDir string) ([]treeEntry, error) {
 			continue
 		}
 		relChild := filepath.ToSlash(filepath.Join(relDir, name))
+		if excludedRel != "" && (relChild == excludedRel || strings.HasPrefix(relChild, excludedRel+"/")) {
+			continue
+		}
 		childAbs := filepath.Join(rootAbs, filepath.FromSlash(relChild))
 		if e.IsDir() {
 			if !isReadablePath(childAbs) {
 				continue
 			}
-			children, err := buildTree(rootAbs, relChild)
+			children, err := buildTree(rootAbs, relChild, excludedRel)
 			if err != nil {
 				if os.IsPermission(err) {
 					continue
@@ -573,6 +598,57 @@ func writeHTTPString(w http.ResponseWriter, s string) {
 func writeHTTPBytes(w http.ResponseWriter, b []byte) {
 	if _, err := w.Write(b); err != nil {
 		log.Printf("http response write error: %v", err)
+	}
+}
+
+func writeFileMaybeOverwrite(path string, data []byte, overwrite bool) error {
+	if !overwrite {
+		if _, err := os.Stat(path); err == nil {
+			return nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	return os.WriteFile(path, data, 0o644)
+}
+
+func relIfWithin(rootAbs, maybeChildAbs string) string {
+	if !isWithinRoot(rootAbs, maybeChildAbs) || sameDir(rootAbs, maybeChildAbs) {
+		return ""
+	}
+	rel, err := filepath.Rel(rootAbs, maybeChildAbs)
+	if err != nil {
+		return ""
+	}
+	return filepath.ToSlash(rel)
+}
+
+func dirExistsAndNotEmpty(dir string) bool {
+	f, err := os.Open(dir)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = f.Close() }()
+	_, err = f.Readdirnames(1)
+	return err == nil
+}
+
+func confirmOverwrite(outAbs string, overwrite bool) bool {
+	modeText := "overwrite existing files"
+	if !overwrite {
+		modeText = "not overwrite existing files"
+	}
+	fmt.Fprintf(os.Stdout, "Output directory %s already contains files. Continue? Existing files may be overwritten (%s) [y/N]: ", outAbs, modeText)
+	reader := bufio.NewReader(os.Stdin)
+	line, err := reader.ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "y", "yes":
+		return true
+	default:
+		return false
 	}
 }
 
