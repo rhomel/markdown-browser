@@ -19,7 +19,9 @@ import (
 	"strings"
 
 	"github.com/yuin/goldmark"
+	gast "github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/extension"
+	"github.com/yuin/goldmark/text"
 )
 
 type treeEntry struct {
@@ -516,13 +518,14 @@ func renderMarkdownContent(rootAbs, mdRel string) (title string, htmlBody string
 	if err != nil {
 		return "", "", err
 	}
-	title, markdownSource := splitLeadingMarkdownTitle(string(data))
-
-	var out strings.Builder
 	md := goldmark.New(
 		goldmark.WithExtensions(extension.GFM),
 	)
-	if err := md.Convert([]byte(markdownSource), &out); err != nil {
+	doc := md.Parser().Parse(text.NewReader(data))
+	title = extractAndRemoveLeadingH1(doc, data)
+
+	var out strings.Builder
+	if err := md.Renderer().Render(&out, data, doc); err != nil {
 		return "", "", err
 	}
 	return title, out.String(), nil
@@ -734,56 +737,38 @@ func serveErrorPage(w http.ResponseWriter, status int, message string) {
 	writeHTTPString(w, page)
 }
 
-func splitLeadingMarkdownTitle(src string) (title string, body string) {
-	s := strings.TrimPrefix(src, "\uFEFF")
-	lines := strings.Split(s, "\n")
-	i := 0
-	for i < len(lines) && strings.TrimSpace(lines[i]) == "" {
-		i++
-	}
-	if i >= len(lines) {
-		return "", s
-	}
-
-	trimmed := strings.TrimSpace(lines[i])
-	if strings.HasPrefix(trimmed, "# ") {
-		title = strings.TrimSpace(strings.TrimPrefix(trimmed, "# "))
-		j := i + 1
-		for j < len(lines) && strings.TrimSpace(lines[j]) == "" {
-			j++
-		}
-		return title, strings.Join(lines[j:], "\n")
-	}
-
-	if i+1 < len(lines) {
-		next := strings.TrimSpace(lines[i+1])
-		if trimmed != "" && isSetextH1Underline(next) {
-			title = trimmed
-			j := i + 2
-			for j < len(lines) && strings.TrimSpace(lines[j]) == "" {
-				j++
-			}
-			return title, strings.Join(lines[j:], "\n")
-		}
-	}
-
-	return "", s
-}
-
-func isSetextH1Underline(line string) bool {
-	if len(line) == 0 {
-		return false
-	}
-	for _, r := range line {
-		if r != '=' {
-			return false
-		}
-	}
-	return true
-}
-
 func renderWrappedPage(kind pageKind, title, body string) (string, error) {
 	return activeTemplates.render(kind, title, body)
+}
+
+func extractAndRemoveLeadingH1(doc gast.Node, source []byte) string {
+	heading, ok := doc.FirstChild().(*gast.Heading)
+	if !ok || heading.Level != 1 {
+		return ""
+	}
+	title := strings.TrimSpace(extractNodeText(heading, source))
+	doc.RemoveChild(doc, heading)
+	return title
+}
+
+func extractNodeText(node gast.Node, source []byte) string {
+	var b strings.Builder
+	_ = gast.Walk(node, func(n gast.Node, entering bool) (gast.WalkStatus, error) {
+		if !entering {
+			return gast.WalkContinue, nil
+		}
+		switch v := n.(type) {
+		case *gast.Text:
+			b.Write(v.Segment.Value(source))
+			if v.HardLineBreak() || v.SoftLineBreak() {
+				b.WriteByte(' ')
+			}
+		case *gast.String:
+			b.Write(v.Value)
+		}
+		return gast.WalkContinue, nil
+	})
+	return b.String()
 }
 
 func treeEntryHref(pageRelDir, entryRelPath string, absoluteLinks bool) string {

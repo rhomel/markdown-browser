@@ -334,13 +334,37 @@ func TestOptionalTemplatesOverridePageWrappers(t *testing.T) {
 	}
 }
 
-func TestSplitLeadingMarkdownTitle(t *testing.T) {
-	title, body := splitLeadingMarkdownTitle("\n# Welcome!\n\nHello\n\n# Next\n")
-	if title != "Welcome!" {
-		t.Fatalf("title = %q, want %q", title, "Welcome!")
+func TestRenderMarkdownContentExtractsLeadingTitleATXAndSetext(t *testing.T) {
+	root := t.TempDir()
+
+	writeTestFile(t, filepath.Join(root, "atx.md"), "\n# Welcome!\n\nHello\n\n# Next\n")
+	title, body, err := renderMarkdownContent(root, "atx.md")
+	if err != nil {
+		t.Fatalf("renderMarkdownContent(atx) error: %v", err)
 	}
-	if body != "Hello\n\n# Next\n" {
-		t.Fatalf("body = %q", body)
+	if title != "Welcome!" {
+		t.Fatalf("ATX title = %q, want %q", title, "Welcome!")
+	}
+	if strings.Contains(body, "<h1>Welcome!</h1>") {
+		t.Fatalf("ATX leading h1 should be removed from body: %q", body)
+	}
+	if !strings.Contains(body, "<h1>Next</h1>") || !strings.Contains(body, "<p>Hello</p>") {
+		t.Fatalf("ATX body rendered unexpectedly: %q", body)
+	}
+
+	writeTestFile(t, filepath.Join(root, "setext.md"), "Welcome!\n====\n\nHello\n")
+	title, body, err = renderMarkdownContent(root, "setext.md")
+	if err != nil {
+		t.Fatalf("renderMarkdownContent(setext) error: %v", err)
+	}
+	if title != "Welcome!" {
+		t.Fatalf("Setext title = %q, want %q", title, "Welcome!")
+	}
+	if strings.Contains(body, "<h1>Welcome!</h1>") {
+		t.Fatalf("Setext leading h1 should be removed from body: %q", body)
+	}
+	if !strings.Contains(body, "<p>Hello</p>") {
+		t.Fatalf("Setext body rendered unexpectedly: %q", body)
 	}
 }
 
