@@ -78,9 +78,21 @@ render the index.md file to index.html.
 The generate command should print to STDOUT each file it processes as it
 generates them.
 
-# dependencies
+# Dependencies
 
 Module dependencies should be avoided as much as possible.
 
 For markdown the github.com/yuin/goldmark library may be used.
+
+# Ignored Files
+
+Ignored files and directories should not be included in either `server` or
+`generate` command modes. When in `server` mode the request should result in a
+404 response.
+
+The following conditions should cause a file or directory to be ignored:
+
+- dot files and directories; names beginning with a '.' like '.git' should
+  always be ignored and skipped.
+- files and directories without read permission
 

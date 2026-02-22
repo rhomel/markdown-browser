@@ -99,9 +99,17 @@ func handleRequest(w http.ResponseWriter, r *http.Request, rootAbs string) {
 		notFound(w)
 		return
 	}
+	if isIgnoredRelPath(rel) {
+		notFound(w)
+		return
+	}
 
 	st, err := os.Stat(abs)
 	if err == nil && st.IsDir() {
+		if !isReadablePath(abs) {
+			notFound(w)
+			return
+		}
 		serveDirIndex(w, rootAbs, rel)
 		return
 	}
@@ -189,6 +197,12 @@ func generateAll(rootAbs, outAbs string) error {
 
 	return filepath.WalkDir(rootAbs, func(pathAbs string, d fs.DirEntry, err error) error {
 		if err != nil {
+			if os.IsPermission(err) {
+				if d != nil && d.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
 			return err
 		}
 
@@ -197,6 +211,18 @@ func generateAll(rootAbs, outAbs string) error {
 			return err
 		}
 		if rel == "." {
+			return nil
+		}
+		if isIgnoredBaseName(d.Name()) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !isReadablePath(pathAbs) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 
@@ -271,6 +297,10 @@ func serveMarkdownSource(w http.ResponseWriter, rootAbs, mdRel string) {
 		notFound(w)
 		return
 	}
+	if isIgnoredRelPath(mdRel) {
+		notFound(w)
+		return
+	}
 	data, err := os.ReadFile(abs)
 	if err != nil {
 		notFound(w)
@@ -295,6 +325,12 @@ func renderDirectoryHTML(rootAbs, relDir string) (string, error) {
 	if err := ensureDir(dirAbs); err != nil {
 		return "", err
 	}
+	if relDir != "" && isIgnoredRelPath(relDir) {
+		return "", errors.New("ignored path")
+	}
+	if !isReadablePath(dirAbs) {
+		return "", errors.New("directory not readable")
+	}
 
 	entries, err := buildTree(rootAbs, relDir)
 	if err != nil {
@@ -318,10 +354,20 @@ func buildTree(rootAbs, relDir string) ([]treeEntry, error) {
 	var out []treeEntry
 	for _, e := range list {
 		name := e.Name()
+		if isIgnoredBaseName(name) {
+			continue
+		}
 		relChild := filepath.ToSlash(filepath.Join(relDir, name))
+		childAbs := filepath.Join(rootAbs, filepath.FromSlash(relChild))
 		if e.IsDir() {
+			if !isReadablePath(childAbs) {
+				continue
+			}
 			children, err := buildTree(rootAbs, relChild)
 			if err != nil {
+				if os.IsPermission(err) {
+					continue
+				}
 				return nil, err
 			}
 			out = append(out, treeEntry{
@@ -334,6 +380,9 @@ func buildTree(rootAbs, relDir string) ([]treeEntry, error) {
 		}
 
 		if !strings.HasSuffix(name, ".md") {
+			continue
+		}
+		if !isReadablePath(childAbs) {
 			continue
 		}
 
@@ -382,6 +431,12 @@ func renderMarkdownFile(rootAbs, mdRel string) (string, error) {
 	abs := filepath.Join(rootAbs, filepath.FromSlash(mdRel))
 	if !isWithinRoot(rootAbs, abs) {
 		return "", errors.New("path escape")
+	}
+	if isIgnoredRelPath(mdRel) {
+		return "", errors.New("ignored path")
+	}
+	if !isReadablePath(abs) {
+		return "", errors.New("file not readable")
 	}
 	data, err := os.ReadFile(abs)
 	if err != nil {
@@ -448,19 +503,57 @@ func sameDir(a, b string) bool {
 }
 
 func dirHasIndexMD(dirAbs string) (bool, error) {
-	st, err := os.Stat(filepath.Join(dirAbs, "index.md"))
+	indexPath := filepath.Join(dirAbs, "index.md")
+	if isIgnoredBaseName("index.md") {
+		return false, nil
+	}
+	st, err := os.Stat(indexPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return false, nil
 		}
+		if os.IsPermission(err) {
+			return false, nil
+		}
 		return false, err
 	}
-	return !st.IsDir(), nil
+	if st.IsDir() || !isReadablePath(indexPath) {
+		return false, nil
+	}
+	return true, nil
 }
 
 func notFound(w http.ResponseWriter) {
 	w.WriteHeader(http.StatusNotFound)
 	_, _ = io.WriteString(w, "<!doctype html><html><body><h1>404 Not Found</h1></body></html>")
+}
+
+func isIgnoredBaseName(name string) bool {
+	return strings.HasPrefix(name, ".")
+}
+
+func isIgnoredRelPath(rel string) bool {
+	if rel == "." || rel == "" {
+		return false
+	}
+	for _, part := range strings.Split(filepath.ToSlash(rel), "/") {
+		if part == "" || part == "." {
+			continue
+		}
+		if isIgnoredBaseName(part) {
+			return true
+		}
+	}
+	return false
+}
+
+func isReadablePath(p string) bool {
+	f, err := os.Open(p)
+	if err != nil {
+		return false
+	}
+	_ = f.Close()
+	return true
 }
 
 func fatalf(msg string, args ...any) {

@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -141,6 +142,84 @@ func TestGenerateAllIndexMDOverridesAutoIndex(t *testing.T) {
 	}
 
 	assertFileContains(t, filepath.Join(out, "posts", "a.html"), "<p>A</p>")
+}
+
+func TestIgnoredDotFilesAndDirectoriesAreSkippedAnd404(t *testing.T) {
+	root := t.TempDir()
+	out := t.TempDir()
+
+	writeTestFile(t, filepath.Join(root, "visible.md"), "# Visible\n")
+	writeTestFile(t, filepath.Join(root, ".hidden.md"), "# Hidden\n")
+	writeTestFile(t, filepath.Join(root, ".secret", "a.md"), "# Secret\n")
+	writeTestFile(t, filepath.Join(root, "posts", ".draft.md"), "# Draft\n")
+
+	if err := generateAll(root, out); err != nil {
+		t.Fatalf("generateAll error: %v", err)
+	}
+
+	assertFileContains(t, filepath.Join(out, "index.html"), `href="/visible.html"`)
+	if _, err := os.Stat(filepath.Join(out, ".hidden.html")); !os.IsNotExist(err) {
+		t.Fatalf("unexpected generated hidden file html: err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(out, ".secret")); !os.IsNotExist(err) {
+		t.Fatalf("unexpected generated hidden directory: err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(out, "posts", ".draft.html")); !os.IsNotExist(err) {
+		t.Fatalf("unexpected generated hidden nested file html: err=%v", err)
+	}
+
+	for _, target := range []string{"/.hidden.html", "/.hidden.md", "/.secret", "/.secret/a.html", "/posts/.draft.html"} {
+		req := httptest.NewRequest(http.MethodGet, target, nil)
+		rr := httptest.NewRecorder()
+		handleRequest(rr, req, root)
+		if rr.Code != http.StatusNotFound {
+			t.Fatalf("%s status = %d, want 404", target, rr.Code)
+		}
+	}
+}
+
+func TestUnreadableFilesAreIgnored(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("permission-bit test is POSIX-specific")
+	}
+
+	root := t.TempDir()
+	out := t.TempDir()
+
+	writeTestFile(t, filepath.Join(root, "visible.md"), "# Visible\n")
+	unreadable := filepath.Join(root, "private.md")
+	writeTestFile(t, unreadable, "# Private\n")
+
+	if err := os.Chmod(unreadable, 0o000); err != nil {
+		t.Fatalf("chmod unreadable file: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(unreadable, 0o644) })
+
+	if isReadablePath(unreadable) {
+		t.Skip("filesystem/runtime does not enforce unreadable test file permissions")
+	}
+
+	if err := generateAll(root, out); err != nil {
+		t.Fatalf("generateAll error: %v", err)
+	}
+
+	assertFileContains(t, filepath.Join(out, "index.html"), `href="/visible.html"`)
+	indexHTML := readTestFile(t, filepath.Join(out, "index.html"))
+	if strings.Contains(indexHTML, `href="/private.html"`) {
+		t.Fatalf("unreadable file should not appear in generated index: %q", indexHTML)
+	}
+	if _, err := os.Stat(filepath.Join(out, "private.html")); !os.IsNotExist(err) {
+		t.Fatalf("unexpected generated html for unreadable file: err=%v", err)
+	}
+
+	for _, target := range []string{"/private.html", "/private.md"} {
+		req := httptest.NewRequest(http.MethodGet, target, nil)
+		rr := httptest.NewRecorder()
+		handleRequest(rr, req, root)
+		if rr.Code != http.StatusNotFound {
+			t.Fatalf("%s status = %d, want 404", target, rr.Code)
+		}
+	}
 }
 
 func writeTestFile(t *testing.T, path, content string) {
