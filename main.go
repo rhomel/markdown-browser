@@ -267,14 +267,14 @@ func generateAll(rootAbs, outAbs string) error {
 }
 
 func renderMDFileTo(rootAbs, mdRel, outFile string) error {
-	htmlBody, err := renderMarkdownFile(rootAbs, mdRel)
+	pageHTML, err := renderMarkdownPage(rootAbs, mdRel)
 	if err != nil {
 		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(outFile), 0o755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(outFile, []byte(wrapHTMLPage(htmlBody)), 0o644); err != nil {
+	if err := os.WriteFile(outFile, []byte(pageHTML), 0o644); err != nil {
 		return err
 	}
 	fmt.Println(outFile)
@@ -288,7 +288,7 @@ func serveDirIndex(w http.ResponseWriter, rootAbs, relDir string) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = io.WriteString(w, data)
+	writeHTTPString(w, data)
 }
 
 func serveMarkdownSource(w http.ResponseWriter, rootAbs, mdRel string) {
@@ -307,17 +307,17 @@ func serveMarkdownSource(w http.ResponseWriter, rootAbs, mdRel string) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	_, _ = w.Write(data)
+	writeHTTPBytes(w, data)
 }
 
 func serveRenderedMarkdown(w http.ResponseWriter, rootAbs, mdRel string) {
-	htmlBody, err := renderMarkdownFile(rootAbs, mdRel)
+	pageHTML, err := renderMarkdownPage(rootAbs, mdRel)
 	if err != nil {
 		notFound(w)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = io.WriteString(w, wrapHTMLPage(htmlBody))
+	writeHTTPString(w, pageHTML)
 }
 
 func renderDirectoryHTML(rootAbs, relDir string) (string, error) {
@@ -453,6 +453,14 @@ func renderMarkdownFile(rootAbs, mdRel string) (string, error) {
 	return out.String(), nil
 }
 
+func renderMarkdownPage(rootAbs, mdRel string) (string, error) {
+	htmlBody, err := renderMarkdownFile(rootAbs, mdRel)
+	if err != nil {
+		return "", err
+	}
+	return wrapHTMLPage(htmlBody), nil
+}
+
 func wrapHTMLPage(body string) string {
 	return "<!doctype html><html><head><meta charset=\"utf-8\"></head><body>" + body + "</body></html>"
 }
@@ -525,7 +533,7 @@ func dirHasIndexMD(dirAbs string) (bool, error) {
 
 func notFound(w http.ResponseWriter) {
 	w.WriteHeader(http.StatusNotFound)
-	_, _ = io.WriteString(w, "<!doctype html><html><body><h1>404 Not Found</h1></body></html>")
+	writeHTTPString(w, "<!doctype html><html><body><h1>404 Not Found</h1></body></html>")
 }
 
 func isIgnoredBaseName(name string) bool {
@@ -554,6 +562,18 @@ func isReadablePath(p string) bool {
 	}
 	_ = f.Close()
 	return true
+}
+
+func writeHTTPString(w http.ResponseWriter, s string) {
+	if _, err := io.WriteString(w, s); err != nil {
+		log.Printf("http response write error: %v", err)
+	}
+}
+
+func writeHTTPBytes(w http.ResponseWriter, b []byte) {
+	if _, err := w.Write(b); err != nil {
+		log.Printf("http response write error: %v", err)
+	}
 }
 
 func fatalf(msg string, args ...any) {
