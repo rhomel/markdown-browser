@@ -38,6 +38,7 @@ type pageKind string
 const (
 	pageKindPage      pageKind = "page"
 	pageKindDirectory pageKind = "directory"
+	pageKindIndex     pageKind = "index"
 	pageKindArticle   pageKind = "article"
 	pageKindError     pageKind = "error"
 )
@@ -52,6 +53,7 @@ type pageTemplateData struct {
 type pageTemplates struct {
 	page      *htemplate.Template
 	directory *htemplate.Template
+	index     *htemplate.Template
 	article   *htemplate.Template
 	errPage   *htemplate.Template
 }
@@ -409,7 +411,11 @@ func renderDirectoryHTMLWithOptions(rootAbs, relDir, excludedRel string, absolut
 
 	var b strings.Builder
 	renderTreeHTML(&b, entries, relDir, absoluteLinks)
-	return renderWrappedPage(pageKindDirectory, "Index", b.String())
+	kind := pageKindDirectory
+	if relDir == "" {
+		kind = pageKindIndex
+	}
+	return renderWrappedPage(kind, "Index", b.String())
 }
 
 func buildTree(rootAbs, relDir, excludedRel string) ([]treeEntry, error) {
@@ -833,6 +839,9 @@ func loadPageTemplates(dir string) (*pageTemplates, error) {
 	if pt.directory, err = loadTemplateFileOrFallback(filepath.Join(dir, "directory.html"), nil); err != nil {
 		return nil, err
 	}
+	if pt.index, err = loadTemplateFileOrFallback(filepath.Join(dir, "index.html"), nil); err != nil {
+		return nil, err
+	}
 	if pt.article, err = loadTemplateFileOrFallback(filepath.Join(dir, "article.html"), nil); err != nil {
 		return nil, err
 	}
@@ -856,6 +865,12 @@ func loadTemplateFileOrFallback(path string, fallback *htemplate.Template) (*hte
 func (p *pageTemplates) render(kind pageKind, title, body string, modTime *time.Time) (string, error) {
 	tmpl := p.page
 	switch kind {
+	case pageKindIndex:
+		if p.index != nil {
+			tmpl = p.index
+		} else if p.directory != nil {
+			tmpl = p.directory
+		}
 	case pageKindDirectory:
 		if p.directory != nil {
 			tmpl = p.directory

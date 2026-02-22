@@ -310,12 +310,14 @@ func TestOptionalTemplatesOverridePageWrappers(t *testing.T) {
 	tmplDir := t.TempDir()
 
 	writeTestFile(t, filepath.Join(root, "hello.md"), "# Hello\n\nBody\n")
+	writeTestFile(t, filepath.Join(root, "posts", "a.md"), "A\n")
 	fixedTime := time.Date(2026, 2, 22, 9, 30, 0, 0, time.Local)
 	if err := os.Chtimes(filepath.Join(root, "hello.md"), fixedTime, fixedTime); err != nil {
 		t.Fatalf("chtimes hello.md: %v", err)
 	}
 	writeTestFile(t, filepath.Join(tmplDir, "page.html"), `P|{{.Title}}|{{.Body}}`)
 	writeTestFile(t, filepath.Join(tmplDir, "directory.html"), `D|{{.Title}}|{{.Body}}`)
+	writeTestFile(t, filepath.Join(tmplDir, "index.html"), `I|{{.Title}}|{{.Body}}`)
 	writeTestFile(t, filepath.Join(tmplDir, "article.html"), `A|{{.Title}}|{{.ModifyTimeLocale}}|{{.ModifyTimeISO8601}}|{{.Body}}`)
 	writeTestFile(t, filepath.Join(tmplDir, "error.html"), `E|{{.Title}}|{{.Body}}`)
 
@@ -325,12 +327,19 @@ func TestOptionalTemplatesOverridePageWrappers(t *testing.T) {
 		t.Fatalf("setActiveTemplates error: %v", err)
 	}
 
-	dirPage, err := renderDirectoryHTML(root, "")
+	rootIndexPage, err := renderDirectoryHTML(root, "")
 	if err != nil {
-		t.Fatalf("renderDirectoryHTML error: %v", err)
+		t.Fatalf("renderDirectoryHTML(root) error: %v", err)
 	}
-	if !strings.HasPrefix(dirPage, "D|Index|") {
-		t.Fatalf("directory wrapper not applied: %q", dirPage)
+	if !strings.HasPrefix(rootIndexPage, "I|Index|") {
+		t.Fatalf("root index wrapper not applied: %q", rootIndexPage)
+	}
+	nestedDirPage, err := renderDirectoryHTML(root, "posts")
+	if err != nil {
+		t.Fatalf("renderDirectoryHTML(posts) error: %v", err)
+	}
+	if !strings.HasPrefix(nestedDirPage, "D|Index|") {
+		t.Fatalf("nested directory should still use directory wrapper: %q", nestedDirPage)
 	}
 
 	articlePage, err := renderMarkdownPage(root, "hello.md")

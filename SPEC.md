@@ -98,12 +98,15 @@ default html page wrapper.
 Additional template files may be defined for specific uses if present:
 
 - `directory.html` - used for directory trees instead of `page.html`
+- `index.html` - used for just the root '/' resource if present, otherwise falls back to `directory.html`
 - `article.html` - used for markdown files instead of `page.html`
 - `error.html` - used for errors instead of `page.html`
 
 ## Rendered Markdown Article Titles
 
-If the markdown file starts with a level 1 header and the associated template file utilizes the Title property, then the rendered HTML should exclude the first header from the body and instead use the text for the Title property.
+If the markdown file starts with a level 1 header and the associated template
+file utilizes the Title property, then the rendered HTML should exclude the
+first header from the body and instead use the text for the Title property.
 
 Example:
 
