@@ -288,6 +288,49 @@ func TestMDIgnorePatternsAffectServerAndGenerate(t *testing.T) {
 	}
 }
 
+func TestOptionalTemplatesOverridePageWrappers(t *testing.T) {
+	root := t.TempDir()
+	tmplDir := t.TempDir()
+
+	writeTestFile(t, filepath.Join(root, "hello.md"), "# Hello\n")
+	writeTestFile(t, filepath.Join(tmplDir, "page.html"), `P|{{.Title}}|{{.Body}}`)
+	writeTestFile(t, filepath.Join(tmplDir, "directory.html"), `D|{{.Title}}|{{.Body}}`)
+	writeTestFile(t, filepath.Join(tmplDir, "article.html"), `A|{{.Title}}|{{.Body}}`)
+	writeTestFile(t, filepath.Join(tmplDir, "error.html"), `E|{{.Title}}|{{.Body}}`)
+
+	orig := activeTemplates
+	t.Cleanup(func() { activeTemplates = orig })
+	if err := setActiveTemplates(tmplDir); err != nil {
+		t.Fatalf("setActiveTemplates error: %v", err)
+	}
+
+	dirPage, err := renderDirectoryHTML(root, "")
+	if err != nil {
+		t.Fatalf("renderDirectoryHTML error: %v", err)
+	}
+	if !strings.HasPrefix(dirPage, "D|Index|") {
+		t.Fatalf("directory wrapper not applied: %q", dirPage)
+	}
+
+	articlePage, err := renderMarkdownPage(root, "hello.md")
+	if err != nil {
+		t.Fatalf("renderMarkdownPage error: %v", err)
+	}
+	if !strings.HasPrefix(articlePage, "A||") {
+		t.Fatalf("article wrapper not applied: %q", articlePage)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/missing.html", nil)
+	rr := httptest.NewRecorder()
+	handleRequest(rr, req, root)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("missing route status = %d, want 404", rr.Code)
+	}
+	if !strings.HasPrefix(rr.Body.String(), "E||") {
+		t.Fatalf("error wrapper not applied: %q", rr.Body.String())
+	}
+}
+
 func writeTestFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

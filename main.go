@@ -2,10 +2,12 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"flag"
 	"fmt"
 	"html"
+	htemplate "html/template"
 	"io"
 	"io/fs"
 	"log"
@@ -28,10 +30,32 @@ type treeEntry struct {
 	Children  []treeEntry
 }
 
+type pageKind string
+
+const (
+	pageKindPage      pageKind = "page"
+	pageKindDirectory pageKind = "directory"
+	pageKindArticle   pageKind = "article"
+	pageKindError     pageKind = "error"
+)
+
+type pageTemplateData struct {
+	Title string
+	Body  htemplate.HTML
+}
+
+type pageTemplates struct {
+	page      *htemplate.Template
+	directory *htemplate.Template
+	article   *htemplate.Template
+	errPage   *htemplate.Template
+}
+
 var (
 	errPathEscape      = errors.New("path escape")
 	errIgnoredPath     = errors.New("ignored path")
 	errPathNotReadable = errors.New("path not readable")
+	activeTemplates    = mustLoadPageTemplates("")
 )
 
 func main() {
@@ -52,6 +76,7 @@ func main() {
 func runServer(args []string) {
 	fsFlags := flag.NewFlagSet("server", flag.ExitOnError)
 	listenAddr := fsFlags.String("listen", "0.0.0.0:3333", "listen interface/address")
+	templatesDir := fsFlags.String("templates", "", "template directory")
 	fsFlags.Parse(args)
 
 	if fsFlags.NArg() != 1 {
@@ -65,6 +90,9 @@ func runServer(args []string) {
 	}
 	if err := ensureDir(rootAbs); err != nil {
 		fatalf("invalid markdown dir: %v", err)
+	}
+	if err := setActiveTemplates(*templatesDir); err != nil {
+		fatalf("load templates: %v", err)
 	}
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -140,6 +168,7 @@ func runGenerate(args []string) {
 	fsFlags := flag.NewFlagSet("generate", flag.ExitOnError)
 	outDir := fsFlags.String("out", "", "output directory (required)")
 	overwrite := fsFlags.Bool("overwrite", true, "overwrite existing output files")
+	templatesDir := fsFlags.String("templates", "", "template directory")
 	fsFlags.Parse(args)
 
 	if *outDir == "" {
@@ -156,6 +185,9 @@ func runGenerate(args []string) {
 	}
 	if err := ensureDir(rootAbs); err != nil {
 		fatalf("invalid markdown dir: %v", err)
+	}
+	if err := setActiveTemplates(*templatesDir); err != nil {
+		fatalf("load templates: %v", err)
 	}
 
 	outAbs, err := filepath.Abs(*outDir)
@@ -342,7 +374,7 @@ func serveRenderedMarkdown(w http.ResponseWriter, rootAbs, mdRel string) {
 			return
 		}
 		log.Printf("render markdown error for %q: %v", mdRel, err)
-		http.Error(w, "internal server error", http.StatusInternalServerError)
+		serveErrorPage(w, http.StatusInternalServerError, "Internal Server Error")
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -376,7 +408,7 @@ func renderDirectoryHTMLWithOptions(rootAbs, relDir, excludedRel string, absolut
 
 	var b strings.Builder
 	renderTreeHTML(&b, entries, relDir, absoluteLinks)
-	return wrapHTMLPageWithTitle("Index", b.String()), nil
+	return renderWrappedPage(pageKindDirectory, "Index", b.String())
 }
 
 func buildTree(rootAbs, relDir, excludedRel string) ([]treeEntry, error) {
@@ -495,25 +527,15 @@ func renderMarkdownPage(rootAbs, mdRel string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return wrapHTMLPage(htmlBody), nil
+	return renderWrappedPage(pageKindArticle, "", htmlBody)
 }
 
-func wrapHTMLPage(body string) string {
+func wrapHTMLPage(body string) (string, error) {
 	return wrapHTMLPageWithTitle("", body)
 }
 
-func wrapHTMLPageWithTitle(title, body string) string {
-	var b strings.Builder
-	b.WriteString("<!doctype html><html><head><meta charset=\"utf-8\">")
-	if title != "" {
-		b.WriteString("<title>")
-		b.WriteString(html.EscapeString(title))
-		b.WriteString("</title>")
-	}
-	b.WriteString("</head><body>")
-	b.WriteString(body)
-	b.WriteString("</body></html>")
-	return b.String()
+func wrapHTMLPageWithTitle(title, body string) (string, error) {
+	return renderWrappedPage(pageKindPage, title, body)
 }
 
 func reqToRel(reqPath string) (string, error) {
@@ -584,8 +606,7 @@ func dirHasIndexMD(rootAbs, dirAbs string) (bool, error) {
 }
 
 func notFound(w http.ResponseWriter) {
-	w.WriteHeader(http.StatusNotFound)
-	writeHTTPString(w, wrapHTMLPage("<h1>404 Not Found</h1>"))
+	serveErrorPage(w, http.StatusNotFound, "404 Not Found")
 }
 
 func isIgnoredBaseName(name string) bool {
@@ -699,6 +720,22 @@ func isNotFoundRenderError(err error) bool {
 		errors.Is(err, errPathNotReadable)
 }
 
+func serveErrorPage(w http.ResponseWriter, status int, message string) {
+	w.WriteHeader(status)
+	body := "<h1>" + html.EscapeString(message) + "</h1>"
+	page, err := renderWrappedPage(pageKindError, "", body)
+	if err != nil {
+		log.Printf("render error page failed: %v", err)
+		writeHTTPString(w, "<!doctype html><html><body>"+body+"</body></html>")
+		return
+	}
+	writeHTTPString(w, page)
+}
+
+func renderWrappedPage(kind pageKind, title, body string) (string, error) {
+	return activeTemplates.render(kind, title, body)
+}
+
 func treeEntryHref(pageRelDir, entryRelPath string, absoluteLinks bool) string {
 	if absoluteLinks {
 		return "/" + strings.TrimPrefix(entryRelPath, "./")
@@ -717,6 +754,92 @@ func writeHTTPString(w http.ResponseWriter, s string) {
 	if _, err := io.WriteString(w, s); err != nil {
 		log.Printf("http response write error: %v", err)
 	}
+}
+
+func setActiveTemplates(dir string) error {
+	t, err := loadPageTemplates(dir)
+	if err != nil {
+		return err
+	}
+	activeTemplates = t
+	return nil
+}
+
+func mustLoadPageTemplates(dir string) *pageTemplates {
+	t, err := loadPageTemplates(dir)
+	if err != nil {
+		panic(err)
+	}
+	return t
+}
+
+func loadPageTemplates(dir string) (*pageTemplates, error) {
+	pageTmpl, err := htemplate.New("page").Parse(defaultPageTemplateText())
+	if err != nil {
+		return nil, err
+	}
+	pt := &pageTemplates{page: pageTmpl}
+	if dir == "" {
+		return pt, nil
+	}
+	if err := ensureDir(dir); err != nil {
+		return nil, err
+	}
+	if pt.page, err = loadTemplateFileOrFallback(filepath.Join(dir, "page.html"), pt.page); err != nil {
+		return nil, err
+	}
+	if pt.directory, err = loadTemplateFileOrFallback(filepath.Join(dir, "directory.html"), nil); err != nil {
+		return nil, err
+	}
+	if pt.article, err = loadTemplateFileOrFallback(filepath.Join(dir, "article.html"), nil); err != nil {
+		return nil, err
+	}
+	if pt.errPage, err = loadTemplateFileOrFallback(filepath.Join(dir, "error.html"), nil); err != nil {
+		return nil, err
+	}
+	return pt, nil
+}
+
+func loadTemplateFileOrFallback(path string, fallback *htemplate.Template) (*htemplate.Template, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fallback, nil
+		}
+		return nil, err
+	}
+	return htemplate.New(filepath.Base(path)).Parse(string(data))
+}
+
+func (p *pageTemplates) render(kind pageKind, title, body string) (string, error) {
+	tmpl := p.page
+	switch kind {
+	case pageKindDirectory:
+		if p.directory != nil {
+			tmpl = p.directory
+		}
+	case pageKindArticle:
+		if p.article != nil {
+			tmpl = p.article
+		}
+	case pageKindError:
+		if p.errPage != nil {
+			tmpl = p.errPage
+		}
+	}
+	var buf bytes.Buffer
+	err := tmpl.Execute(&buf, pageTemplateData{
+		Title: title,
+		Body:  htemplate.HTML(body),
+	})
+	if err != nil {
+		return "", err
+	}
+	return buf.String(), nil
+}
+
+func defaultPageTemplateText() string {
+	return `<!doctype html><html><head><meta charset="utf-8">{{if .Title}}<title>{{.Title}}</title>{{end}}</head><body>{{.Body}}</body></html>`
 }
 
 func writeHTTPBytes(w http.ResponseWriter, b []byte) {

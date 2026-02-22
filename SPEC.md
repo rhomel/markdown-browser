@@ -84,6 +84,19 @@ Module dependencies should be avoided as much as possible.
 
 For markdown the github.com/yuin/goldmark library may be used.
 
+# HTML Template
+
+Both server and generate commands should take an optional
+`-templates=<template-dir>` flag. If the flag is defined, the template file
+`page.html` within the template directory should be used for all pages as the
+default html page wrapper.
+
+Additional template files may be defined for specific uses if present:
+
+- `directory.html` - used for directory trees instead of `page.html`
+- `article.html` - used for markdown files instead of `page.html`
+- `error.html` - used for errors instead of `page.html`
+
 # Ignored Files
 
 Ignored files and directories should not be included in either `server` or
