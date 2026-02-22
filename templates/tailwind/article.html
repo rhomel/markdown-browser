@@ -10,7 +10,7 @@
   <main class="mx-auto max-w-5xl px-4 py-10 sm:px-6">
     <article class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
       <header class="border-b border-slate-200 bg-slate-50 px-6 py-5">
-        <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Article</p>
+        <p class="text-xs font-semibold tracking-[0.08em] text-slate-500">{{if .ModifyTimeLocale}}{{.ModifyTimeLocale}}{{else}}Article{{end}}</p>
         {{if .Title}}<h1 class="mt-2 text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">{{.Title}}</h1>{{end}}
       </header>
       <div class="px-6 py-7 text-[1.05rem] leading-8 text-slate-800

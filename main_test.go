@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestHandleRequestRoutes(t *testing.T) {
@@ -293,9 +294,13 @@ func TestOptionalTemplatesOverridePageWrappers(t *testing.T) {
 	tmplDir := t.TempDir()
 
 	writeTestFile(t, filepath.Join(root, "hello.md"), "# Hello\n\nBody\n")
+	fixedTime := time.Date(2026, 2, 22, 9, 30, 0, 0, time.Local)
+	if err := os.Chtimes(filepath.Join(root, "hello.md"), fixedTime, fixedTime); err != nil {
+		t.Fatalf("chtimes hello.md: %v", err)
+	}
 	writeTestFile(t, filepath.Join(tmplDir, "page.html"), `P|{{.Title}}|{{.Body}}`)
 	writeTestFile(t, filepath.Join(tmplDir, "directory.html"), `D|{{.Title}}|{{.Body}}`)
-	writeTestFile(t, filepath.Join(tmplDir, "article.html"), `A|{{.Title}}|{{.Body}}`)
+	writeTestFile(t, filepath.Join(tmplDir, "article.html"), `A|{{.Title}}|{{.ModifyTimeLocale}}|{{.ModifyTimeISO8601}}|{{.Body}}`)
 	writeTestFile(t, filepath.Join(tmplDir, "error.html"), `E|{{.Title}}|{{.Body}}`)
 
 	orig := activeTemplates
@@ -319,6 +324,9 @@ func TestOptionalTemplatesOverridePageWrappers(t *testing.T) {
 	if !strings.HasPrefix(articlePage, "A|Hello|") {
 		t.Fatalf("article wrapper not applied: %q", articlePage)
 	}
+	if !strings.Contains(articlePage, fixedTime.Format("2006-01-02T15:04:05")) {
+		t.Fatalf("article template missing ModifyTimeISO8601: %q", articlePage)
+	}
 	if strings.Contains(articlePage, "<h1>Hello</h1>") {
 		t.Fatalf("leading H1 should be moved to Title and removed from article body: %q", articlePage)
 	}
@@ -338,7 +346,7 @@ func TestRenderMarkdownContentExtractsLeadingTitleATXAndSetext(t *testing.T) {
 	root := t.TempDir()
 
 	writeTestFile(t, filepath.Join(root, "atx.md"), "\n# Welcome!\n\nHello\n\n# Next\n")
-	title, body, err := renderMarkdownContent(root, "atx.md")
+	title, body, _, err := renderMarkdownContent(root, "atx.md")
 	if err != nil {
 		t.Fatalf("renderMarkdownContent(atx) error: %v", err)
 	}
@@ -353,7 +361,7 @@ func TestRenderMarkdownContentExtractsLeadingTitleATXAndSetext(t *testing.T) {
 	}
 
 	writeTestFile(t, filepath.Join(root, "setext.md"), "Welcome!\n====\n\nHello\n")
-	title, body, err = renderMarkdownContent(root, "setext.md")
+	title, body, _, err = renderMarkdownContent(root, "setext.md")
 	if err != nil {
 		t.Fatalf("renderMarkdownContent(setext) error: %v", err)
 	}

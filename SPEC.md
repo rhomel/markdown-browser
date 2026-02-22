@@ -159,6 +159,20 @@ Then the rendered HTML should resemble:
 </html>
 ```
 
+## Rendered Article Dates
+
+Each markdown file's modify time (mtime) should be provided to the HTML
+template renderer data as `ModifyTimeLocale` and `ModifyTimeISO8601`. HTML
+templates can then optionally use either field directly within the template.
+
+`ModifyTimeLocale` should be a locale aware format of the time based off of
+the server or generator's timezone and locale settings. This is intended to
+make it easy to have a usable date relevant to the author's context.
+
+`ModifyTimeISO8601` should still use the server/generator's timezone settings
+but may be an easier format to use with client-side javascript for dynamic
+formatting.
+
 # Ignored Files
 
 Ignored files and directories should not be included in either `server` or

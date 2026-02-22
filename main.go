@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/yuin/goldmark"
 	gast "github.com/yuin/goldmark/ast"
@@ -42,8 +43,10 @@ const (
 )
 
 type pageTemplateData struct {
-	Title string
-	Body  htemplate.HTML
+	Title             string
+	Body              htemplate.HTML
+	ModifyTimeLocale  string
+	ModifyTimeISO8601 string
 }
 
 type pageTemplates struct {
@@ -498,25 +501,29 @@ func renderTreeHTML(b *strings.Builder, entries []treeEntry, pageRelDir string, 
 }
 
 func renderMarkdownFile(rootAbs, mdRel string) (string, error) {
-	_, body, err := renderMarkdownContent(rootAbs, mdRel)
+	_, body, _, err := renderMarkdownContent(rootAbs, mdRel)
 	return body, err
 }
 
-func renderMarkdownContent(rootAbs, mdRel string) (title string, htmlBody string, err error) {
+func renderMarkdownContent(rootAbs, mdRel string) (title string, htmlBody string, modTime time.Time, err error) {
 	mdRel = filepath.ToSlash(filepath.Clean(filepath.FromSlash(mdRel)))
 	abs := filepath.Join(rootAbs, filepath.FromSlash(mdRel))
 	if !isWithinRoot(rootAbs, abs) {
-		return "", "", errPathEscape
+		return "", "", time.Time{}, errPathEscape
 	}
 	if isIgnoredRelPath(rootAbs, mdRel) {
-		return "", "", errIgnoredPath
+		return "", "", time.Time{}, errIgnoredPath
 	}
 	if !isReadablePath(abs) {
-		return "", "", errPathNotReadable
+		return "", "", time.Time{}, errPathNotReadable
+	}
+	st, err := os.Stat(abs)
+	if err != nil {
+		return "", "", time.Time{}, err
 	}
 	data, err := os.ReadFile(abs)
 	if err != nil {
-		return "", "", err
+		return "", "", time.Time{}, err
 	}
 	md := goldmark.New(
 		goldmark.WithExtensions(extension.GFM),
@@ -526,17 +533,17 @@ func renderMarkdownContent(rootAbs, mdRel string) (title string, htmlBody string
 
 	var out strings.Builder
 	if err := md.Renderer().Render(&out, data, doc); err != nil {
-		return "", "", err
+		return "", "", time.Time{}, err
 	}
-	return title, out.String(), nil
+	return title, out.String(), st.ModTime(), nil
 }
 
 func renderMarkdownPage(rootAbs, mdRel string) (string, error) {
-	title, htmlBody, err := renderMarkdownContent(rootAbs, mdRel)
+	title, htmlBody, modTime, err := renderMarkdownContent(rootAbs, mdRel)
 	if err != nil {
 		return "", err
 	}
-	return renderWrappedPage(pageKindArticle, title, htmlBody)
+	return renderWrappedPageWithModTime(pageKindArticle, title, htmlBody, &modTime)
 }
 
 func wrapHTMLPageWithTitle(title, body string) (string, error) {
@@ -738,7 +745,11 @@ func serveErrorPage(w http.ResponseWriter, status int, message string) {
 }
 
 func renderWrappedPage(kind pageKind, title, body string) (string, error) {
-	return activeTemplates.render(kind, title, body)
+	return activeTemplates.render(kind, title, body, nil)
+}
+
+func renderWrappedPageWithModTime(kind pageKind, title, body string, modTime *time.Time) (string, error) {
+	return activeTemplates.render(kind, title, body, modTime)
 }
 
 func extractAndRemoveLeadingH1(doc gast.Node, source []byte) string {
@@ -846,7 +857,7 @@ func loadTemplateFileOrFallback(path string, fallback *htemplate.Template) (*hte
 	return htemplate.New(filepath.Base(path)).Parse(string(data))
 }
 
-func (p *pageTemplates) render(kind pageKind, title, body string) (string, error) {
+func (p *pageTemplates) render(kind pageKind, title, body string, modTime *time.Time) (string, error) {
 	tmpl := p.page
 	switch kind {
 	case pageKindDirectory:
@@ -863,9 +874,20 @@ func (p *pageTemplates) render(kind pageKind, title, body string) (string, error
 		}
 	}
 	var buf bytes.Buffer
-	err := tmpl.Execute(&buf, pageTemplateData{
+	data := pageTemplateData{
 		Title: title,
 		Body:  htemplate.HTML(body),
+	}
+	if modTime != nil && !modTime.IsZero() {
+		local := modTime.Local()
+		data.ModifyTimeLocale = local.Format(time.RFC1123)
+		data.ModifyTimeISO8601 = local.Format(time.RFC3339)
+	}
+	err := tmpl.Execute(&buf, pageTemplateData{
+		Title:             data.Title,
+		Body:              data.Body,
+		ModifyTimeLocale:  data.ModifyTimeLocale,
+		ModifyTimeISO8601: data.ModifyTimeISO8601,
 	})
 	if err != nil {
 		return "", err
