@@ -243,6 +243,51 @@ func TestGenerateSkipsOutputDirectoryWhenNestedInInput(t *testing.T) {
 	assertFileContains(t, filepath.Join(out, "hello.html"), "<h1>Hello</h1>")
 }
 
+func TestMDIgnorePatternsAffectServerAndGenerate(t *testing.T) {
+	root := t.TempDir()
+	out := t.TempDir()
+
+	writeTestFile(t, filepath.Join(root, ".mdignore"), "out\n*.draft.md\nignored-dir/\n")
+	writeTestFile(t, filepath.Join(root, "hello.md"), "# Hello\n")
+	writeTestFile(t, filepath.Join(root, "pending-article.draft.md"), "# Draft\n")
+	writeTestFile(t, filepath.Join(root, "ignored-dir", "note.md"), "# Ignored Dir\n")
+	writeTestFile(t, filepath.Join(root, "posts", "keep.md"), "# Keep\n")
+
+	if err := generateAll(root, out, true); err != nil {
+		t.Fatalf("generateAll error: %v", err)
+	}
+
+	indexHTML := readTestFile(t, filepath.Join(out, "index.html"))
+	if strings.Contains(indexHTML, "pending-article.draft") {
+		t.Fatalf("draft markdown matched by .mdignore should be excluded from generated index: %q", indexHTML)
+	}
+	if strings.Contains(indexHTML, "ignored-dir") {
+		t.Fatalf("ignored directory matched by .mdignore should be excluded from generated index: %q", indexHTML)
+	}
+	if _, err := os.Stat(filepath.Join(out, "pending-article.draft.html")); !os.IsNotExist(err) {
+		t.Fatalf("unexpected generated html for .mdignore-matched file: err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(out, "ignored-dir")); !os.IsNotExist(err) {
+		t.Fatalf("unexpected generated output for .mdignore-matched directory: err=%v", err)
+	}
+
+	for _, target := range []string{"/pending-article.draft.html", "/pending-article.draft.md", "/ignored-dir", "/ignored-dir/note.html"} {
+		req := httptest.NewRequest(http.MethodGet, target, nil)
+		rr := httptest.NewRecorder()
+		handleRequest(rr, req, root)
+		if rr.Code != http.StatusNotFound {
+			t.Fatalf("%s status = %d, want 404", target, rr.Code)
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/posts/keep.html", nil)
+	rr := httptest.NewRecorder()
+	handleRequest(rr, req, root)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("kept file status = %d, want 200", rr.Code)
+	}
+}
+
 func writeTestFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

@@ -95,6 +95,23 @@ The following conditions should cause a file or directory to be ignored:
 - dot files and directories; names beginning with a '.' like '.git' should
   always be ignored and skipped.
 - files and directories without read permission
+- files and/or directories match a pattern in the .mdignore file
+
+## .mdignore file
+
+The .mdignore file follows the same format as a .gitignore file. If a file or
+directory path matches a rules in the .mdignore file, then the server and
+generate commands ignore the path.
+
+For example the following .mdignore file contents:
+
+```
+out
+*.draft.md
+```
+
+will cause a file or directory with the name `out` and a markdown file like
+`pending-article.draft.md` to be ignored.
 
 # Special Cases
 

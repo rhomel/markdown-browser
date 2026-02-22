@@ -106,7 +106,7 @@ func handleRequest(w http.ResponseWriter, r *http.Request, rootAbs string) {
 		notFound(w)
 		return
 	}
-	if isIgnoredRelPath(rel) {
+	if isIgnoredRelPath(rootAbs, rel) {
 		notFound(w)
 		return
 	}
@@ -196,7 +196,7 @@ func runGenerate(args []string) {
 func generateAll(rootAbs, outAbs string, overwrite bool) error {
 	excludedRel := relIfWithin(rootAbs, outAbs)
 
-	hasRootIndexMD, err := dirHasIndexMD(rootAbs)
+	hasRootIndexMD, err := dirHasIndexMD(rootAbs, rootAbs)
 	if err != nil {
 		return err
 	}
@@ -237,7 +237,7 @@ func generateAll(rootAbs, outAbs string, overwrite bool) error {
 			}
 			return nil
 		}
-		if isIgnoredBaseName(d.Name()) {
+		if isIgnoredRelPath(rootAbs, rel) {
 			if d.IsDir() {
 				return filepath.SkipDir
 			}
@@ -256,7 +256,7 @@ func generateAll(rootAbs, outAbs string, overwrite bool) error {
 				return err
 			}
 
-			hasIndexMD, err := dirHasIndexMD(pathAbs)
+			hasIndexMD, err := dirHasIndexMD(rootAbs, pathAbs)
 			if err != nil {
 				return err
 			}
@@ -321,7 +321,7 @@ func serveMarkdownSource(w http.ResponseWriter, rootAbs, mdRel string) {
 		notFound(w)
 		return
 	}
-	if isIgnoredRelPath(mdRel) {
+	if isIgnoredRelPath(rootAbs, mdRel) {
 		notFound(w)
 		return
 	}
@@ -362,7 +362,7 @@ func renderDirectoryHTMLWithOptions(rootAbs, relDir, excludedRel string, absolut
 	if err := ensureDir(dirAbs); err != nil {
 		return "", err
 	}
-	if relDir != "" && isIgnoredRelPath(relDir) {
+	if relDir != "" && isIgnoredRelPath(rootAbs, relDir) {
 		return "", errIgnoredPath
 	}
 	if !isReadablePath(dirAbs) {
@@ -389,10 +389,10 @@ func buildTree(rootAbs, relDir, excludedRel string) ([]treeEntry, error) {
 	var out []treeEntry
 	for _, e := range list {
 		name := e.Name()
-		if isIgnoredBaseName(name) {
+		relChild := filepath.ToSlash(filepath.Join(relDir, name))
+		if isIgnoredRelPath(rootAbs, relChild) {
 			continue
 		}
-		relChild := filepath.ToSlash(filepath.Join(relDir, name))
 		if excludedRel != "" && (relChild == excludedRel || strings.HasPrefix(relChild, excludedRel+"/")) {
 			continue
 		}
@@ -469,7 +469,7 @@ func renderMarkdownFile(rootAbs, mdRel string) (string, error) {
 	if !isWithinRoot(rootAbs, abs) {
 		return "", errPathEscape
 	}
-	if isIgnoredRelPath(mdRel) {
+	if isIgnoredRelPath(rootAbs, mdRel) {
 		return "", errIgnoredPath
 	}
 	if !isReadablePath(abs) {
@@ -561,9 +561,10 @@ func sameDir(a, b string) bool {
 	return aEval == bEval
 }
 
-func dirHasIndexMD(dirAbs string) (bool, error) {
+func dirHasIndexMD(rootAbs, dirAbs string) (bool, error) {
 	indexPath := filepath.Join(dirAbs, "index.md")
-	if isIgnoredBaseName("index.md") {
+	relIndex, err := filepath.Rel(rootAbs, indexPath)
+	if err == nil && isIgnoredRelPath(rootAbs, filepath.ToSlash(relIndex)) {
 		return false, nil
 	}
 	st, err := os.Stat(indexPath)
@@ -591,17 +592,21 @@ func isIgnoredBaseName(name string) bool {
 	return strings.HasPrefix(name, ".")
 }
 
-func isIgnoredRelPath(rel string) bool {
+func isIgnoredRelPath(rootAbs, rel string) bool {
 	if rel == "." || rel == "" {
 		return false
 	}
-	for _, part := range strings.Split(filepath.ToSlash(rel), "/") {
+	rel = filepath.ToSlash(rel)
+	for _, part := range strings.Split(rel, "/") {
 		if part == "" || part == "." {
 			continue
 		}
 		if isIgnoredBaseName(part) {
 			return true
 		}
+	}
+	if matchesMDIgnore(rootAbs, rel) {
+		return true
 	}
 	return false
 }
@@ -613,6 +618,78 @@ func isReadablePath(p string) bool {
 	}
 	_ = f.Close()
 	return true
+}
+
+func matchesMDIgnore(rootAbs, rel string) bool {
+	patterns, err := readMDIgnorePatterns(rootAbs)
+	if err != nil {
+		return false
+	}
+	return matchMDIgnore(patterns, filepath.ToSlash(rel))
+}
+
+func readMDIgnorePatterns(rootAbs string) ([]string, error) {
+	data, err := os.ReadFile(filepath.Join(rootAbs, ".mdignore"))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) || os.IsPermission(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var patterns []string
+	sc := bufio.NewScanner(strings.NewReader(string(data)))
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		patterns = append(patterns, filepath.ToSlash(line))
+	}
+	if err := sc.Err(); err != nil {
+		return nil, err
+	}
+	return patterns, nil
+}
+
+func matchMDIgnore(patterns []string, rel string) bool {
+	rel = strings.TrimPrefix(filepath.ToSlash(rel), "./")
+	parts := strings.Split(rel, "/")
+	for _, pat := range patterns {
+		if pat == "" {
+			continue
+		}
+		dirOnly := strings.HasSuffix(pat, "/")
+		pat = strings.TrimSuffix(pat, "/")
+		if pat == "" {
+			continue
+		}
+		if strings.Contains(pat, "/") {
+			if mdignorePathMatch(pat, rel) {
+				return true
+			}
+			if dirOnly && strings.HasPrefix(rel, pat+"/") {
+				return true
+			}
+			continue
+		}
+		for i, part := range parts {
+			if mdignorePathMatch(pat, part) {
+				if dirOnly && i == len(parts)-1 {
+					// best-effort: treat trailing slash patterns as directory names; callers use path segments for dirs/children.
+				}
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func mdignorePathMatch(pattern, value string) bool {
+	ok, err := path.Match(pattern, value)
+	if err != nil {
+		return false
+	}
+	return ok
 }
 
 func isNotFoundRenderError(err error) bool {
