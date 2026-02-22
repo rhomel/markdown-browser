@@ -496,42 +496,44 @@ func renderTreeHTML(b *strings.Builder, entries []treeEntry, pageRelDir string, 
 }
 
 func renderMarkdownFile(rootAbs, mdRel string) (string, error) {
+	_, body, err := renderMarkdownContent(rootAbs, mdRel)
+	return body, err
+}
+
+func renderMarkdownContent(rootAbs, mdRel string) (title string, htmlBody string, err error) {
 	mdRel = filepath.ToSlash(filepath.Clean(filepath.FromSlash(mdRel)))
 	abs := filepath.Join(rootAbs, filepath.FromSlash(mdRel))
 	if !isWithinRoot(rootAbs, abs) {
-		return "", errPathEscape
+		return "", "", errPathEscape
 	}
 	if isIgnoredRelPath(rootAbs, mdRel) {
-		return "", errIgnoredPath
+		return "", "", errIgnoredPath
 	}
 	if !isReadablePath(abs) {
-		return "", errPathNotReadable
+		return "", "", errPathNotReadable
 	}
 	data, err := os.ReadFile(abs)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
+	title, markdownSource := splitLeadingMarkdownTitle(string(data))
 
 	var out strings.Builder
 	md := goldmark.New(
 		goldmark.WithExtensions(extension.GFM),
 	)
-	if err := md.Convert(data, &out); err != nil {
-		return "", err
+	if err := md.Convert([]byte(markdownSource), &out); err != nil {
+		return "", "", err
 	}
-	return out.String(), nil
+	return title, out.String(), nil
 }
 
 func renderMarkdownPage(rootAbs, mdRel string) (string, error) {
-	htmlBody, err := renderMarkdownFile(rootAbs, mdRel)
+	title, htmlBody, err := renderMarkdownContent(rootAbs, mdRel)
 	if err != nil {
 		return "", err
 	}
-	return renderWrappedPage(pageKindArticle, "", htmlBody)
-}
-
-func wrapHTMLPage(body string) (string, error) {
-	return wrapHTMLPageWithTitle("", body)
+	return renderWrappedPage(pageKindArticle, title, htmlBody)
 }
 
 func wrapHTMLPageWithTitle(title, body string) (string, error) {
@@ -723,13 +725,61 @@ func isNotFoundRenderError(err error) bool {
 func serveErrorPage(w http.ResponseWriter, status int, message string) {
 	w.WriteHeader(status)
 	body := "<h1>" + html.EscapeString(message) + "</h1>"
-	page, err := renderWrappedPage(pageKindError, "", body)
+	page, err := renderWrappedPage(pageKindError, message, body)
 	if err != nil {
 		log.Printf("render error page failed: %v", err)
 		writeHTTPString(w, "<!doctype html><html><body>"+body+"</body></html>")
 		return
 	}
 	writeHTTPString(w, page)
+}
+
+func splitLeadingMarkdownTitle(src string) (title string, body string) {
+	s := strings.TrimPrefix(src, "\uFEFF")
+	lines := strings.Split(s, "\n")
+	i := 0
+	for i < len(lines) && strings.TrimSpace(lines[i]) == "" {
+		i++
+	}
+	if i >= len(lines) {
+		return "", s
+	}
+
+	trimmed := strings.TrimSpace(lines[i])
+	if strings.HasPrefix(trimmed, "# ") {
+		title = strings.TrimSpace(strings.TrimPrefix(trimmed, "# "))
+		j := i + 1
+		for j < len(lines) && strings.TrimSpace(lines[j]) == "" {
+			j++
+		}
+		return title, strings.Join(lines[j:], "\n")
+	}
+
+	if i+1 < len(lines) {
+		next := strings.TrimSpace(lines[i+1])
+		if trimmed != "" && isSetextH1Underline(next) {
+			title = trimmed
+			j := i + 2
+			for j < len(lines) && strings.TrimSpace(lines[j]) == "" {
+				j++
+			}
+			return title, strings.Join(lines[j:], "\n")
+		}
+	}
+
+	return "", s
+}
+
+func isSetextH1Underline(line string) bool {
+	if len(line) == 0 {
+		return false
+	}
+	for _, r := range line {
+		if r != '=' {
+			return false
+		}
+	}
+	return true
 }
 
 func renderWrappedPage(kind pageKind, title, body string) (string, error) {

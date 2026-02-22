@@ -45,7 +45,7 @@ func TestHandleRequestRoutes(t *testing.T) {
 			target:      "/hello.html",
 			wantStatus:  http.StatusOK,
 			wantType:    "text/html; charset=utf-8",
-			wantContain: "<h1>Hello</h1>",
+			wantContain: "<title>Hello</title>",
 		},
 		{
 			name:        "raw markdown source",
@@ -109,7 +109,7 @@ func TestGenerateAllCreatesIndexesAndRendersMarkdown(t *testing.T) {
 
 	assertFileContains(t, filepath.Join(out, "index.html"), `href="hello.html"`)
 	assertFileContains(t, filepath.Join(out, "articles", "index.html"), `href="a.html"`)
-	assertFileContains(t, filepath.Join(out, "hello.html"), "<h1>Hello</h1>")
+	assertFileContains(t, filepath.Join(out, "hello.html"), "<title>Hello</title>")
 	assertFileContains(t, filepath.Join(out, "articles", "a.html"), "<p>A</p>")
 }
 
@@ -129,16 +129,16 @@ func TestGenerateAllIndexMDOverridesAutoIndex(t *testing.T) {
 	if strings.Contains(rootIndex, "<ul>") {
 		t.Fatalf("root index.html should be rendered from index.md, got auto directory index: %q", rootIndex)
 	}
-	if !strings.Contains(rootIndex, "<h1>Home</h1>") {
-		t.Fatalf("root index.html missing rendered markdown content: %q", rootIndex)
+	if !strings.Contains(rootIndex, "<title>Home</title>") {
+		t.Fatalf("root index.html missing extracted title content: %q", rootIndex)
 	}
 
 	postsIndex := readTestFile(t, filepath.Join(out, "posts", "index.html"))
 	if strings.Contains(postsIndex, `href="/posts/a.html"`) {
 		t.Fatalf("posts/index.html should be rendered from posts/index.md, got auto directory listing: %q", postsIndex)
 	}
-	if !strings.Contains(postsIndex, "<h1>Posts Home</h1>") {
-		t.Fatalf("posts/index.html missing rendered markdown content: %q", postsIndex)
+	if !strings.Contains(postsIndex, "<title>Posts Home</title>") {
+		t.Fatalf("posts/index.html missing extracted title content: %q", postsIndex)
 	}
 
 	assertFileContains(t, filepath.Join(out, "posts", "a.html"), "<p>A</p>")
@@ -240,7 +240,7 @@ func TestGenerateSkipsOutputDirectoryWhenNestedInInput(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(out, "existing.html")); !os.IsNotExist(err) {
 		t.Fatalf("generator should not process markdown files inside nested output directory: err=%v", err)
 	}
-	assertFileContains(t, filepath.Join(out, "hello.html"), "<h1>Hello</h1>")
+	assertFileContains(t, filepath.Join(out, "hello.html"), "<title>Hello</title>")
 }
 
 func TestMDIgnorePatternsAffectServerAndGenerate(t *testing.T) {
@@ -292,7 +292,7 @@ func TestOptionalTemplatesOverridePageWrappers(t *testing.T) {
 	root := t.TempDir()
 	tmplDir := t.TempDir()
 
-	writeTestFile(t, filepath.Join(root, "hello.md"), "# Hello\n")
+	writeTestFile(t, filepath.Join(root, "hello.md"), "# Hello\n\nBody\n")
 	writeTestFile(t, filepath.Join(tmplDir, "page.html"), `P|{{.Title}}|{{.Body}}`)
 	writeTestFile(t, filepath.Join(tmplDir, "directory.html"), `D|{{.Title}}|{{.Body}}`)
 	writeTestFile(t, filepath.Join(tmplDir, "article.html"), `A|{{.Title}}|{{.Body}}`)
@@ -316,8 +316,11 @@ func TestOptionalTemplatesOverridePageWrappers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("renderMarkdownPage error: %v", err)
 	}
-	if !strings.HasPrefix(articlePage, "A||") {
+	if !strings.HasPrefix(articlePage, "A|Hello|") {
 		t.Fatalf("article wrapper not applied: %q", articlePage)
+	}
+	if strings.Contains(articlePage, "<h1>Hello</h1>") {
+		t.Fatalf("leading H1 should be moved to Title and removed from article body: %q", articlePage)
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/missing.html", nil)
@@ -326,8 +329,18 @@ func TestOptionalTemplatesOverridePageWrappers(t *testing.T) {
 	if rr.Code != http.StatusNotFound {
 		t.Fatalf("missing route status = %d, want 404", rr.Code)
 	}
-	if !strings.HasPrefix(rr.Body.String(), "E||") {
+	if !strings.HasPrefix(rr.Body.String(), "E|404 Not Found|") {
 		t.Fatalf("error wrapper not applied: %q", rr.Body.String())
+	}
+}
+
+func TestSplitLeadingMarkdownTitle(t *testing.T) {
+	title, body := splitLeadingMarkdownTitle("\n# Welcome!\n\nHello\n\n# Next\n")
+	if title != "Welcome!" {
+		t.Fatalf("title = %q, want %q", title, "Welcome!")
+	}
+	if body != "Hello\n\n# Next\n" {
+		t.Fatalf("body = %q", body)
 	}
 }
 

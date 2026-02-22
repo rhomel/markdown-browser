@@ -84,7 +84,7 @@ Module dependencies should be avoided as much as possible.
 
 For markdown the github.com/yuin/goldmark library may be used.
 
-# HTML Template
+# HTML Template Rendering
 
 Both server and generate commands should take an optional
 `-templates=<template-dir>` flag. If the flag is defined, the template file
@@ -96,6 +96,67 @@ Additional template files may be defined for specific uses if present:
 - `directory.html` - used for directory trees instead of `page.html`
 - `article.html` - used for markdown files instead of `page.html`
 - `error.html` - used for errors instead of `page.html`
+
+## Rendered Markdown Article Titles
+
+If the markdown file starts with a level 1 header and the associated template file utilizes the Title property, then the rendered HTML should exclude the first header from the body and instead use the text for the Title property.
+
+Example:
+
+article.md contents:
+
+```markdown
+
+# Welcome!
+
+Hello and welcome to my blog!
+
+# Recommendations
+
+- Burger shops
+- Sushi shops
+- Taco shops
+
+```
+
+templates/page.html contents:
+
+```html
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>{{.Title}}</title>
+</head>
+<body>
+  <h1>{{if .Title}}{{end}}</h1>
+  <article>
+  {{.Body}}
+  </article>
+</body>
+</html>
+```
+
+Then the rendered HTML should resemble:
+
+```html
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Welcome!</title>
+</head>
+<body>
+  <h1>Welcome!</h1>
+  <article>
+    <h1>Recommendations</h1>
+    <ul>
+      <li>Burger shops</li>
+      <li>Sushi shops</li>
+      <li>Taco shops</li>
+    </ul>
+  </article>
+</body>
+</html>
+```
 
 # Ignored Files
 
